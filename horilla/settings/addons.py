@@ -1,23 +1,31 @@
 """
-Optional integrations (e.g. AWS S3) layered on top of base settings.
+SKOPAQ settings overrides, layered on top of upstream's base settings.
 
-Imported from horilla.settings.__init__ after base.py. Client overrides belong
-in local_settings.py (imported after this module) — do not import them here.
+`horilla/settings/__init__.py` does `from .base import *` and then imports this
+module if it exists. That makes this the supported seam for local changes, and
+using it means NO upstream file is modified -- so upstream security releases
+merge without conflict, which is the whole reason this deployment runs from our
+own fork.
+
+(The sibling `local_settings.py` seam is gitignored upstream, so it cannot carry
+anything that has to ship with the image. This file is tracked.)
+
+Keep this file small. Anything substantial belongs in its own module, imported
+here -- see `horilla.setup_guard`.
 """
 
-from .base import INSTALLED_APPS, MEDIA_ROOT, MEDIA_URL, env
+from .base import MIDDLEWARE as _UPSTREAM_MIDDLEWARE
 
-if env("AWS_ACCESS_KEY_ID", default=None):
-    AWS_ACCESS_KEY_ID = env("AWS_ACCESS_KEY_ID")
-    AWS_SECRET_ACCESS_KEY = env("AWS_SECRET_ACCESS_KEY")
-    AWS_STORAGE_BUCKET_NAME = env("AWS_STORAGE_BUCKET_NAME")
-    AWS_S3_REGION_NAME = env("AWS_S3_REGION_NAME")
-    DEFAULT_FILE_STORAGE = env("DEFAULT_FILE_STORAGE")
-    AWS_S3_ADDRESSING_STYLE = env("AWS_S3_ADDRESSING_STYLE")
+#: Closes the unauthenticated first-run setup wizard. See horilla/setup_guard.py
+#: for what upstream leaves open and why this is not optional in production.
+_SETUP_WIZARD_GUARD = "horilla.setup_guard.SetupWizardGuardMiddleware"
 
-if env("AWS_ACCESS_KEY_ID", default=None) and "storages" not in INSTALLED_APPS:
-    INSTALLED_APPS.append("storages")
+#: Rebuilt as a new list rather than mutated in place: `from .base import *` has
+#: already bound the upstream list, and appending to it would edit that same
+#: object, which makes the override invisible to anyone reading base.py.
+MIDDLEWARE = list(_UPSTREAM_MIDDLEWARE)
 
-if env("AWS_ACCESS_KEY_ID", default=None) and "storages" in INSTALLED_APPS:
-    MEDIA_URL = f"{env('MEDIA_URL')}/{env('NAMESPACE')}/"
-    MEDIA_ROOT = f"{env('MEDIA_ROOT')}/{env('NAMESPACE')}/"
+#: First in the chain, so a probe for the wizard is refused before any other
+#: middleware does work on its behalf.
+if _SETUP_WIZARD_GUARD not in MIDDLEWARE:
+    MIDDLEWARE.insert(0, _SETUP_WIZARD_GUARD)
