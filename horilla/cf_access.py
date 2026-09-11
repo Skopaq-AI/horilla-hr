@@ -344,7 +344,28 @@ def _resolve_user(email: str):
     """Find, or optionally create, the account for a verified email address."""
     User = get_user_model()
 
-    user = User.objects.filter(email__iexact=email).first()
+    # TWO ACCOUNTS CAN SHARE ONE EMAIL, AND THIS DEPLOYMENT HAS EXACTLY THAT.
+    # Django does not make User.email unique, and hr.skopaq.com carries a
+    # duplicate superuser holding the same address as the real account — one with
+    # an Employee record, one without. A bare `.first()` has no ordering, so it
+    # would pick between them arbitrarily; land on the employee-less one and
+    # Horilla redirects to /login, which looks exactly like a rejected password.
+    #
+    # So prefer an account that can actually use the app, and break any remaining
+    # tie by primary key so the same person lands on the same account every time.
+    # Deterministic-and-wrong is debuggable; arbitrary is not.
+    candidates = User.objects.filter(email__iexact=email)
+    user = candidates.filter(employee_get__isnull=False).order_by("pk").first()
+    if user is None:
+        user = candidates.order_by("pk").first()
+    if user is not None and candidates.count() > 1:
+        logger.warning(
+            "cf_access: %s matches %d accounts; signed in pk=%s. Merge the "
+            "duplicates — the others are unreachable through SSO.",
+            email,
+            candidates.count(),
+            user.pk,
+        )
     if user is None:
         employee = (
             User._meta.apps.get_model("employee", "Employee")
